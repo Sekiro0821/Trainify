@@ -16,12 +16,23 @@ $exercises = $stmt->fetchAll(PDO::FETCH_ASSOC);
 // 2. Hantera formuläret när användaren skickar in ett träningspass
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $exerciseId = (int)$_POST["exercise_id"];
-    $weight     = (float)$_POST["weight"];
-    $reps       = (int)$_POST["reps"];
+    $weights    = $_POST["weights"]; // Nu en array med alla vikter!
+    $repsList   = $_POST["reps"];    // Nu en array med alla reps!
     $duration   = (int)$_POST["duration"];
 
-    // Räkna ut XP (50 grund-XP + vikt * reps)
-    $earnedXP = 50 + (int)($weight * $reps);
+    // Räkna ut XP: 50 grund-XP + (vikt * reps) för VARJE set
+    $earnedXP = 50;
+    $maxWeightInSession = 0;
+
+    for ($i = 0; $i < count($weights); $i++) {
+        $w = (float)$weights[$i];
+        $r = (int)$repsList[$i];
+        $earnedXP += (int)($w * $r);
+
+        if ($w > $maxWeightInSession) {
+            $maxWeightInSession = $w;
+        }
+    }
 
     try {
         $pdo->beginTransaction();
@@ -45,38 +56,40 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         ]);
         $workoutExerciseId = $pdo->lastInsertId();
 
-        // Steg C: Spara set, vikt och reps i sets
+        // Steg C: Loopa igenom alla set och spara dem i sets-tabellen
         $sqlSet = "INSERT INTO sets (workout_exercise_id, reps, set_number, weight) 
                    VALUES (:workout_exercise_id, :reps, :set_number, :weight)";
         $stmtSet = $pdo->prepare($sqlSet);
-        $stmtSet->execute([
-            ':workout_exercise_id' => $workoutExerciseId,
-            ':reps'                => $reps,
-            ':set_number'          => 1,
-            ':weight'              => $weight
-        ]);
 
-        // Bekräfta att allt sparades i databasen
+        for ($i = 0; $i < count($weights); $i++) {
+            $stmtSet->execute([
+                ':workout_exercise_id' => $workoutExerciseId,
+                ':reps'                => (int)$repsList[$i],
+                ':set_number'          => $i + 1,
+                ':weight'              => (float)$weights[$i]
+            ]);
+        }
+
         $pdo->commit();
 
-        // Ge användaren XP och uppdatera level (från functions.php)
-        $xpResult = addXP($pdo, $userId, $earnedXP);
+        // Ge användaren XP och uppdatera level
+        addXP($pdo, $userId, $earnedXP);
 
-        // Kolla Achievement 1: "Första passet!" (ID 1)
+        // Kolla Achievement 1: "Första passet!"
         $ach1 = unlockAchievement($pdo, $userId, 1);
         if ($ach1) {
             $unlockedList[] = $ach1;
         }
 
-        // Kolla Achievement 2: "Tungviktare" (ID 2) om vikten är 100 kg eller mer
-        if ($weight >= 100) {
+        // Kolla Achievement 2: "Tungviktare" (om något av seten var >= 100 kg)
+        if ($maxWeightInSession >= 100) {
             $ach2 = unlockAchievement($pdo, $userId, 2);
             if ($ach2) {
                 $unlockedList[] = $ach2;
             }
         }
 
-        $successMessage = "Passet är sparat! Du tjänade " . $earnedXP . " XP.";
+        $successMessage = "Passet med " . count($weights) . " set är sparat! Du tjänade " . $earnedXP . " XP.";
 
     } catch (PDOException $e) {
         $pdo->rollBack();
@@ -119,16 +132,28 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             <?php endforeach; ?>
         </select><br><br>
 
-        <label>Vikt (kg):</label><br>
-        <input type="number" step="0.5" name="weight" min="0" required><br><br>
+        <h3>Set</h3>
+        <div id="sets-container">
+            <div class="set-row" style="margin-bottom: 10px;">
+                <strong>Set 1:</strong>
+                <label>Vikt (kg):</label>
+                <input type="number" step="0.5" name="weights[]" min="0" required>
 
-        <label>Antal reps:</label><br>
-        <input type="number" name="reps" min="1" required><br><br>
+                <label>Reps:</label>
+                <input type="number" name="reps[]" min="1" required>
+            </div>
+        </div>
+
+        <button type="button" id="add-set-btn">+ Lägg till ett till set</button>
+        <br><br>
 
         <label>Tid för passet (minuter):</label><br>
         <input type="number" name="duration" min="1" value="45" required><br><br>
 
         <button type="submit">Spara träningspass</button>
     </form>
+
+    <!-- Ändra sökvägen här om din JS-fil ligger i en annan mapp eller har ett annat namn -->
+    <script src="assets/js/script.js"></script>
 </body>
 </html>
